@@ -27,8 +27,20 @@ const App: React.FC = () => {
   const [isScoreView, setIsScoreView] = useState(false);
 
   useEffect(() => {
-    if (isDarkMode) document.documentElement.classList.add('dark');
-    else document.documentElement.classList.remove('dark');
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      setIsDarkMode(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
   }, [isDarkMode]);
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
@@ -39,7 +51,6 @@ const App: React.FC = () => {
   };
 
   const selectSubject = async (subject: string) => {
-    // CRITICAL: Reset chapter and content type to ensure correct loading message logic
     setConfig(prev => ({ ...prev, subject, chapter: null, contentType: null }));
     setIsLoading(true);
     try {
@@ -47,33 +58,36 @@ const App: React.FC = () => {
       setChapters(list);
       setStep(AppStep.CHAPTER_SELECT);
     } catch (err) {
-      console.error("Failed to fetch chapters:", err);
-      setChapters(["Chapter 1: The Foundations", "Chapter 2: Essential Concepts", "Chapter 3: Practice Review"]);
+      setChapters(["Chapter 1: Introduction", "Chapter 2: Essential Concepts", "Chapter 3: Final Review"]);
       setStep(AppStep.CHAPTER_SELECT);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleFetchContent = async (updatedConfig: StudyConfig) => {
+  const handleFetchContent = async (targetType: ContentType) => {
+    const updatedConfig = { ...config, contentType: targetType };
+    setConfig(updatedConfig);
     setIsLoading(true);
-    // Don't change step to RESULTS until we have the data
     try {
       const data = await generateEducationalContent(updatedConfig);
       
-      if (updatedConfig.contentType === 'MCQs' && (!data.questions || data.questions.length === 0)) {
-        throw new Error("No MCQs returned from AI");
+      if (targetType === 'MCQs') {
+        if (!data.questions || data.questions.length === 0) {
+          throw new Error("No questions were generated.");
+        }
+        setMcqData(data.questions);
+        setUserAnswers(new Array(data.questions.length).fill(null));
+      } else {
+        setRevisionData(data.revisionPoints);
       }
-
-      setMcqData(data.questions);
-      setRevisionData(data.revisionPoints);
-      setUserAnswers(new Array(data.questions.length).fill(null));
+      
       setCurrentIdx(0);
       setIsScoreView(false);
       setStep(AppStep.RESULTS);
     } catch (err) {
-      console.error("Content generation failed:", err);
-      alert("Bro, the AI is taking a nap or the content failed to load. Try again!");
+      console.error("Generation error:", err);
+      alert("AI was unable to generate content for this topic. Please try again or pick a different chapter.");
     } finally {
       setIsLoading(false);
     }
@@ -105,9 +119,8 @@ const App: React.FC = () => {
   const calculateScore = () => userAnswers.filter((ans, i) => ans === mcqData[i]?.correctIndex).length;
 
   const getLoadingText = () => {
-    // Use step logic to determine the correct message
     if (step === AppStep.SUBJECT_SELECT) return "Analyzing Chapters...";
-    if (step === AppStep.CONTENT_TYPE_SELECT) {
+    if (step === AppStep.CONTENT_TYPE_SELECT || config.contentType) {
         return config.contentType === 'MCQs' ? "Generating 20 MCQs..." : "Preparing Revision Guide...";
     }
     return "Cooking for you...";
@@ -117,14 +130,12 @@ const App: React.FC = () => {
 
   const StudentQuiz = () => {
     const q = mcqData[currentIdx];
-    
-    // Safety check for empty data
     if (!q) return (
-      <div className="text-center p-12 bg-white dark:bg-gray-800 rounded-[2rem] shadow-xl">
-        <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-4">No MCQs Found</h3>
-        <p className="text-slate-500 mb-8">Bro, something went wrong during generation. Try selecting another chapter.</p>
-        <button onClick={() => setStep(AppStep.CHAPTER_SELECT)} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black">Back to Chapters</button>
-      </div>
+        <div className="text-center p-12 bg-white dark:bg-gray-800 rounded-[2rem] shadow-xl">
+          <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-4">No MCQs Available</h3>
+          <p className="text-slate-500 mb-8">Bro, we couldn't load questions for this chapter. Go back and try again.</p>
+          <button onClick={() => setStep(AppStep.CHAPTER_SELECT)} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black">Back to Chapters</button>
+        </div>
     );
 
     const answered = userAnswers[currentIdx] !== null;
@@ -132,15 +143,15 @@ const App: React.FC = () => {
     if (isScoreView) {
       const score = calculateScore();
       return (
-        <div className="text-center py-10 animate-fade-in">
+        <div className="text-center py-10 animate-fade-in max-w-lg mx-auto">
           <div className="w-32 h-32 bg-indigo-600 text-white rounded-full flex items-center justify-center mx-auto mb-8 text-4xl font-black border-8 border-indigo-200 shadow-2xl">
             {mcqData.length > 0 ? Math.round((score / mcqData.length) * 100) : 0}%
           </div>
           <h2 className="text-4xl font-black text-slate-900 dark:text-white mb-2">Quiz Finished!</h2>
-          <p className="text-xl font-bold text-slate-500 mb-8">You got {score} out of {mcqData.length} correct.</p>
-          <div className="space-y-4 max-w-sm mx-auto">
-            <button onClick={() => { setIsScoreView(false); setCurrentIdx(0); setUserAnswers(new Array(mcqData.length).fill(null)); }} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg active-scale shadow-lg">Retry Quiz</button>
-            <button onClick={resetApp} className="w-full py-5 bg-slate-200 dark:bg-gray-800 text-slate-900 dark:text-white rounded-2xl font-black text-lg active-scale">New Topic</button>
+          <p className="text-xl font-bold text-slate-500 mb-10">You got {score} out of {mcqData.length} correct.</p>
+          <div className="space-y-4">
+            <button onClick={() => { setIsScoreView(false); setCurrentIdx(0); setUserAnswers(new Array(mcqData.length).fill(null)); }} className="w-full py-5 bg-indigo-600 text-white rounded-[1.5rem] font-black text-lg active-scale shadow-lg">Retry Quiz</button>
+            <button onClick={resetApp} className="w-full py-5 bg-slate-200 dark:bg-gray-800 text-slate-900 dark:text-white rounded-[1.5rem] font-black text-lg active-scale">New Topic</button>
           </div>
         </div>
       );
@@ -183,14 +194,14 @@ const App: React.FC = () => {
         {answered && (
           <div className="animate-fade-in">
             <div className="p-8 bg-indigo-50 dark:bg-indigo-900/30 rounded-[2rem] mb-8 border border-indigo-100 dark:border-indigo-800 shadow-sm">
-              <span className="text-[11px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest block mb-2">Detailed Explanation</span>
+              <span className="text-[11px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest block mb-2">Detailed Answer</span>
               <p className="text-sm font-bold text-slate-800 dark:text-slate-100 leading-relaxed">{q.explanation}</p>
             </div>
             <button 
               onClick={() => { if (currentIdx < mcqData.length - 1) setCurrentIdx(currentIdx + 1); else setIsScoreView(true); }}
               className="w-full py-6 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2rem] font-black text-xl shadow-xl active-scale"
             >
-              {currentIdx < mcqData.length - 1 ? 'Next Question' : 'Finish Quiz'}
+              {currentIdx < mcqData.length - 1 ? 'Next Question' : 'View Results'}
             </button>
           </div>
         )}
@@ -205,8 +216,8 @@ const App: React.FC = () => {
           <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" /><path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2 2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd" /></svg>
         </div>
         <div>
-          <h3 className="font-black text-xl">Teacher Worksheet Mode</h3>
-          <p className="text-sm font-bold opacity-80 uppercase tracking-widest">Master Key for: {config.chapter}</p>
+          <h3 className="font-black text-xl">Teacher Worksheet Tool</h3>
+          <p className="text-sm font-bold opacity-80 uppercase tracking-widest">Master Answer Key: {config.chapter}</p>
         </div>
       </div>
 
@@ -225,13 +236,13 @@ const App: React.FC = () => {
               ))}
             </div>
             <div className="ml-14 p-6 bg-slate-50 dark:bg-gray-900 rounded-2xl border border-dashed border-slate-300 dark:border-gray-700 shadow-inner">
-               <span className="text-[10px] font-black text-indigo-500 uppercase tracking-widest block mb-2">Pedagogical Insight</span>
+               <span className="text-[10px] font-black text-indigo-500 uppercase tracking-widest block mb-2">Correct Logic</span>
                <p className="text-sm font-bold text-slate-700 dark:text-slate-200 leading-relaxed">{q.explanation}</p>
             </div>
           </div>
         ))}
       </div>
-      <button onClick={resetApp} className="w-full py-6 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2.5rem] font-black text-xl shadow-2xl active-scale">Generate New Worksheet</button>
+      <button onClick={resetApp} className="w-full py-6 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2.5rem] font-black text-xl shadow-2xl active-scale">New Session</button>
     </div>
   );
 
@@ -255,13 +266,13 @@ const App: React.FC = () => {
           <svg className="w-24 h-24 text-white relative" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.247 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
         </div>
         <h1 className="text-7xl md:text-9xl font-black mb-4 tracking-tighter">EduFinder</h1>
-        <p className="text-xl md:text-2xl mb-12 font-medium opacity-80 tracking-tight">Auto-Gen 20 MCQs for Any Topic</p>
+        <p className="text-xl md:text-2xl mb-12 font-medium opacity-80 tracking-tight">Auto-Gen 20 MCQs Instantly</p>
         <div className="w-full max-w-sm space-y-4">
-          <button onClick={() => setStep(AppStep.CLASS_SELECT)} className="w-full bg-white text-indigo-700 py-6 rounded-[2.5rem] font-black text-2xl shadow-2xl active-scale">Get Started</button>
+          <button onClick={() => setStep(AppStep.CLASS_SELECT)} className="w-full bg-white text-indigo-700 py-6 rounded-[2.5rem] font-black text-2xl shadow-2xl active-scale">Start Learning</button>
           <div className="flex items-center justify-between px-8 py-5 bg-white/10 rounded-[2.5rem] border border-white/20 backdrop-blur-lg">
             <div className="text-left">
               <span className="block font-black text-sm">Teacher Mode</span>
-              <span className="text-[10px] opacity-60 font-bold uppercase tracking-widest">Full Answer Key</span>
+              <span className="text-[10px] opacity-60 font-bold uppercase tracking-widest">Worksheet Creation</span>
             </div>
             <button onClick={() => setConfig(c => ({...c, isTeacherMode: !c.isTeacherMode}))} className={`w-14 h-8 rounded-full transition-all relative ${config.isTeacherMode ? 'bg-emerald-400' : 'bg-white/30'}`}>
               <div className={`absolute top-1.5 w-5 h-5 bg-white rounded-full shadow-md transition-all ${config.isTeacherMode ? 'left-8' : 'left-1.5'}`} />
@@ -281,7 +292,7 @@ const App: React.FC = () => {
       </div>
 
       {step === AppStep.CLASS_SELECT && (
-        <StepLayout title="Grade" subtitle="Select your standard" onBack={handleBack}>
+        <StepLayout title="Grade" subtitle="Choose your educational level" onBack={handleBack}>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {['Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12'].map(c => (
               <button key={c} onClick={() => selectClass(c as ClassLevel)} className="p-8 bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-xl border-2 border-transparent hover:border-indigo-500 active-scale transition-all flex flex-col items-center group">
@@ -325,16 +336,12 @@ const App: React.FC = () => {
         <StepLayout title="Select Goal" subtitle={config.chapter || ""} onBack={handleBack}>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
             {(['MCQs', 'Quick Revision'] as ContentType[]).map(t => (
-              <button key={t} onClick={() => {
-                const updatedConfig = { ...config, contentType: t };
-                setConfig(updatedConfig);
-                handleFetchContent(updatedConfig);
-              }} className="p-12 bg-white dark:bg-gray-800 rounded-[3.5rem] shadow-2xl border-2 border-transparent hover:border-indigo-500 group transition-all text-left active-scale">
+              <button key={t} onClick={() => handleFetchContent(t)} className="p-12 bg-white dark:bg-gray-800 rounded-[3.5rem] shadow-2xl border-2 border-transparent hover:border-indigo-500 group transition-all text-left active-scale">
                 <div className={`w-24 h-24 rounded-[2rem] mb-10 flex items-center justify-center transition-all ${t === 'MCQs' ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'} group-hover:scale-110 group-hover:bg-indigo-600 group-hover:text-white shadow-lg`}>
                   {CONTENT_TYPE_ICONS[t]}
                 </div>
                 <h3 className="text-4xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter">{t}</h3>
-                <p className="text-base font-bold text-slate-400 leading-tight">{t === 'MCQs' ? 'Unique 20-question challenge set' : 'Top 10 crucial study points'}</p>
+                <p className="text-base font-bold text-slate-400 leading-tight">{t === 'MCQs' ? '20-question comprehensive challenge' : 'Key facts and revision highlights'}</p>
               </button>
             ))}
           </div>
@@ -342,7 +349,7 @@ const App: React.FC = () => {
       )}
 
       {step === AppStep.RESULTS && (
-        <StepLayout title={config.contentType === 'MCQs' ? 'Study Hub' : 'Revision Hub'} onBack={handleBack}>
+        <StepLayout title={config.contentType === 'MCQs' ? 'Quiz Zone' : 'Revision Hub'} onBack={handleBack}>
            {config.contentType === 'MCQs' ? (
              config.isTeacherMode ? <TeacherView /> : <StudentQuiz />
            ) : (
@@ -352,7 +359,7 @@ const App: React.FC = () => {
                    <div className="p-2 bg-white/20 rounded-xl">
                       <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                    </div>
-                   Key Study Points
+                   Chapter Highlights
                  </h2>
                  <div className="space-y-4">
                     {revisionData.map((point, i) => (
@@ -363,7 +370,7 @@ const App: React.FC = () => {
                     ))}
                  </div>
                </div>
-               <button onClick={resetApp} className="w-full py-7 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2.5rem] font-black text-2xl active-scale shadow-2xl">Start New Chapter</button>
+               <button onClick={resetApp} className="w-full py-7 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2.5rem] font-black text-2xl active-scale shadow-2xl">Return Home</button>
              </div>
            )}
         </StepLayout>
@@ -373,7 +380,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 bg-white/95 dark:bg-black/95 backdrop-blur-xl z-[100] flex flex-col items-center justify-center p-8 text-center animate-fade-in">
           <div className="w-24 h-24 border-[10px] border-indigo-600 border-t-transparent rounded-full animate-spin mb-10 shadow-2xl"></div>
           <h2 className="text-4xl md:text-5xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter">{getLoadingText()}</h2>
-          <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-sm animate-pulse">Wait while Bro cooks...</p>
+          <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-sm animate-pulse">Bro is hard at work...</p>
         </div>
       )}
     </div>
