@@ -3,21 +3,19 @@ export type ClassLevel = 'Class 6' | 'Class 7' | 'Class 8' | 'Class 9' | 'Class 
 
 export type ContentType = 'MCQs' | 'Quick Revision';
 
+export interface MCQQuestion {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+}
+
 export interface StudyConfig {
   classLevel: ClassLevel | null;
   subject: string | null;
   contentType: ContentType | null;
   chapter: string | null;
   isTeacherMode: boolean;
-}
-
-export interface SearchResult {
-  title: string;
-  url: string;
-  type: 'PDF' | 'Web' | 'Video';
-  source: string;
-  isDownloadable: boolean;
-  relevanceScore?: number;
 }
 
 export enum AppStep {

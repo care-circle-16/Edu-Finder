@@ -1,15 +1,28 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { StudyConfig, SearchResult } from "../types";
+import { StudyConfig, MCQQuestion } from "../types";
 
-// Correct SDK initialization pattern
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+
+/**
+ * Helper to safely parse JSON from model responses, 
+ * stripping markdown code blocks if present.
+ */
+const safeJsonParse = (text: string) => {
+  try {
+    const cleaned = text.replace(/```json|```/gi, "").trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("JSON Parse Error:", e, "Raw text:", text);
+    return null;
+  }
+};
 
 export const fetchChapters = async (classLevel: string, subject: string): Promise<string[]> => {
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `List the exact official chapters for ${classLevel} ${subject} according to the latest 2024-25 syllabus. Return ONLY a JSON array of strings representing chapter names.`,
+      contents: `List exactly 15 main chapters for ${classLevel} ${subject} (Latest 2024-25 Syllabus). Return ONLY a JSON array of strings. No extra text.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -18,94 +31,66 @@ export const fetchChapters = async (classLevel: string, subject: string): Promis
         }
       }
     });
-    return JSON.parse(response.text || "[]");
+    
+    const chapters = safeJsonParse(response.text || "[]");
+    return Array.isArray(chapters) && chapters.length > 0 ? chapters : ["Chapter 1", "Chapter 2", "Chapter 3"];
   } catch (error) {
-    console.error("Error fetching chapters:", error);
-    return ["Introduction", "Core Concepts", "Standard Practice"]; 
+    console.error("Chapter error:", error);
+    return ["Introduction", "Core Principles", "Advanced Topics", "Practice Set"];
   }
 };
 
 interface StudyResponse {
   summary: string;
-  sampleQuestions: string[];
-  resources: SearchResult[];
+  questions: MCQQuestion[];
+  revisionPoints: string[];
 }
 
-export const fetchEducationalContent = async (config: StudyConfig): Promise<StudyResponse> => {
-  const { classLevel, subject, contentType, chapter, isTeacherMode } = config;
+export const generateEducationalContent = async (config: StudyConfig): Promise<StudyResponse> => {
+  const { classLevel, subject, contentType, chapter } = config;
+  const isMCQ = contentType === 'MCQs';
   
-  const varietySeed = Math.floor(Math.random() * 10000);
-  const persona = isTeacherMode 
-    ? "Expert Teacher (Focus on worksheets, detailed answer keys, and professional lesson plans)" 
-    : "Student (Focus on simple explanations, easy revision points, and clear notes)";
-  
-  let prompt = '';
-  if (contentType === 'MCQs') {
-    prompt = `
-      STRICT TASK: Search for high-quality Multiple Choice Questions (MCQ) PDF sets for ${classLevel} ${subject}, Chapter: "${chapter}".
-      Seed ID: ${varietySeed}.
-      
-      Persona: ${persona}.
-      Requirement: Provide a brief summary of what this chapter covers for a ${isTeacherMode ? 'teacher' : 'student'}. 
-      Then, find the best direct educational links and PDFs for practice.
-    `;
-  } else {
-    prompt = `
-      Task: Provide the top 5 essential QUICK REVISION facts for ${classLevel} ${subject}, Chapter: "${chapter}".
-      Persona: ${persona}.
-      Search for official revision notes and high-quality YouTube tutorial links for this specific topic.
-    `;
-  }
+  // Prompt optimized for speed and clarity
+  const prompt = isMCQ 
+    ? `Create 20 unique MCQs for ${classLevel} ${subject}, Chapter: ${chapter}. 
+       Format: Array of objects with 'question', 'options' (4 strings), 'correctIndex' (0-3), and 'explanation'. 
+       Target difficulty: Competitive exam level.`
+    : `Generate 10 crucial revision bullet points for ${classLevel} ${subject}, Chapter: ${chapter}. Return as a JSON array of strings.`;
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }],
-      },
+        responseMimeType: "application/json",
+        responseSchema: isMCQ ? {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING },
+              options: { type: Type.ARRAY, items: { type: Type.STRING } },
+              correctIndex: { type: Type.INTEGER },
+              explanation: { type: Type.STRING }
+            },
+            required: ["question", "options", "correctIndex", "explanation"]
+          }
+        } : {
+          type: Type.ARRAY,
+          items: { type: Type.STRING }
+        }
+      }
     });
 
-    const text = response.text || "";
-    
-    let facts: string[] = text.split('\n')
-      .filter(line => line.trim().length > 25 && !line.includes('http'))
-      .slice(0, 5)
-      .map(s => s.replace(/^\d+\.\s*/, '').replace(/^-\s*/, '').trim());
+    const parsedData = safeJsonParse(response.text || "[]");
 
-    if (facts.length === 0) {
-      facts = ["No quick summary available. Please check the resources below."];
-    }
-
-    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    
-    const resources: SearchResult[] = chunks.map((chunk: any) => {
-      const url = chunk.web?.uri || '#';
-      const title = chunk.web?.title || 'Educational Link';
-      const isPDF = url.toLowerCase().endsWith('.pdf') || title.toLowerCase().includes('pdf');
-      const isVideo = url.includes('youtube.com') || url.includes('youtu.be') || title.toLowerCase().includes('video');
-      
-      let type: 'PDF' | 'Video' | 'Web' = 'Web';
-      if (isPDF) type = 'PDF';
-      else if (isVideo) type = 'Video';
-
-      return {
-        title, url, type,
-        source: new URL(url !== '#' ? url : 'https://google.com').hostname.replace('www.', ''),
-        isDownloadable: isPDF,
-        relevanceScore: contentType === 'Quick Revision' && isVideo ? 10 : (isPDF ? 9 : 5)
-      };
-    })
-    .filter((r: SearchResult) => r.url !== '#' && !r.url.includes('google.com/search'))
-    .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
-
-    return { 
-      summary: text, 
-      sampleQuestions: facts,
-      resources 
+    return {
+      summary: `Detailed content for ${chapter}`,
+      questions: isMCQ ? (Array.isArray(parsedData) ? parsedData : []) : [],
+      revisionPoints: !isMCQ ? (Array.isArray(parsedData) ? parsedData : []) : []
     };
   } catch (error) {
-    console.error("Error fetching content:", error);
+    console.error("Content generation error:", error);
     throw error;
   }
 };

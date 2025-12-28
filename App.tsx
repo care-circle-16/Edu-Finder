@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
-import { StudyConfig, AppStep, ClassLevel, ContentType, SearchResult } from './types';
+import { StudyConfig, AppStep, ClassLevel, ContentType, MCQQuestion } from './types';
 import { CLASS_SUBJECTS, CONTENT_TYPE_ICONS } from './constants';
 import StepLayout from './components/StepLayout';
-import { fetchEducationalContent, fetchChapters } from './services/geminiService';
+import { generateEducationalContent, fetchChapters } from './services/geminiService';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<AppStep>(AppStep.HOME);
@@ -18,67 +18,81 @@ const App: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [chapters, setChapters] = useState<string[]>([]);
-  const [results, setResults] = useState<{summary: string, sampleQuestions: string[], resources: SearchResult[]} | null>(null);
+  const [mcqData, setMcqData] = useState<MCQQuestion[]>([]);
+  const [revisionData, setRevisionData] = useState<string[]>([]);
+  
+  // Quiz State
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [userAnswers, setUserAnswers] = useState<(number | null)[]>([]);
+  const [isScoreView, setIsScoreView] = useState(false);
 
   useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    if (isDarkMode) document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
-  const nextStep = () => setStep(prev => prev + 1);
-  const prevStep = () => setStep(prev => prev - 1);
-
-  const handleStart = () => setStep(AppStep.CLASS_SELECT);
 
   const selectClass = (level: ClassLevel) => {
-    setConfig(prev => ({ ...prev, classLevel: level, subject: null, chapter: null }));
-    nextStep();
+    setConfig(prev => ({ ...prev, classLevel: level, subject: null }));
+    setStep(AppStep.SUBJECT_SELECT);
   };
 
   const selectSubject = async (subject: string) => {
-    setConfig(prev => ({ ...prev, subject }));
+    // CRITICAL: Reset chapter and content type to ensure correct loading message logic
+    setConfig(prev => ({ ...prev, subject, chapter: null, contentType: null }));
     setIsLoading(true);
-    nextStep();
     try {
       const list = await fetchChapters(config.classLevel!, subject);
       setChapters(list);
+      setStep(AppStep.CHAPTER_SELECT);
     } catch (err) {
-      setChapters(["Core Overview", "Important MCQs", "Exam Preparation"]);
+      console.error("Failed to fetch chapters:", err);
+      setChapters(["Chapter 1: The Foundations", "Chapter 2: Essential Concepts", "Chapter 3: Practice Review"]);
+      setStep(AppStep.CHAPTER_SELECT);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const selectChapter = (chapter: string) => {
-    setConfig(prev => ({ ...prev, chapter }));
-    nextStep();
-  };
-
-  const selectContentType = (type: ContentType) => {
-    const updatedConfig = { ...config, contentType: type };
-    setConfig(updatedConfig);
-    handleSearch(updatedConfig);
-  };
-
-  const handleSearch = async (currentConfig: StudyConfig) => {
+  const handleFetchContent = async (updatedConfig: StudyConfig) => {
     setIsLoading(true);
-    setStep(AppStep.RESULTS);
+    // Don't change step to RESULTS until we have the data
     try {
-      const data = await fetchEducationalContent(currentConfig);
-      setResults(data);
+      const data = await generateEducationalContent(updatedConfig);
+      
+      if (updatedConfig.contentType === 'MCQs' && (!data.questions || data.questions.length === 0)) {
+        throw new Error("No MCQs returned from AI");
+      }
+
+      setMcqData(data.questions);
+      setRevisionData(data.revisionPoints);
+      setUserAnswers(new Array(data.questions.length).fill(null));
+      setCurrentIdx(0);
+      setIsScoreView(false);
+      setStep(AppStep.RESULTS);
     } catch (err) {
-      alert("Search failed. Shuffling again...");
-      setStep(AppStep.CONTENT_TYPE_SELECT);
+      console.error("Content generation failed:", err);
+      alert("Bro, the AI is taking a nap or the content failed to load. Try again!");
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleAnswerSelect = (optIdx: number) => {
+    if (userAnswers[currentIdx] !== null) return;
+    const newAnswers = [...userAnswers];
+    newAnswers[currentIdx] = optIdx;
+    setUserAnswers(newAnswers);
   };
 
   const resetApp = () => {
+    setStep(AppStep.HOME);
+    setMcqData([]);
+    setRevisionData([]);
+    setUserAnswers([]);
+    setCurrentIdx(0);
+    setIsScoreView(false);
     setConfig({
       classLevel: null,
       subject: null,
@@ -86,46 +100,172 @@ const App: React.FC = () => {
       chapter: null,
       isTeacherMode: config.isTeacherMode,
     });
-    setResults(null);
-    setChapters([]);
-    setStep(AppStep.HOME);
   };
 
-  const ThemeToggle = () => (
-    <button onClick={toggleTheme} className="p-3 rounded-2xl bg-white/10 dark:bg-white/5 backdrop-blur-md shadow-lg transition-transform active:scale-90 border border-white/20">
-      {isDarkMode ? '🌙' : '☀️'}
-    </button>
+  const calculateScore = () => userAnswers.filter((ans, i) => ans === mcqData[i]?.correctIndex).length;
+
+  const getLoadingText = () => {
+    // Use step logic to determine the correct message
+    if (step === AppStep.SUBJECT_SELECT) return "Analyzing Chapters...";
+    if (step === AppStep.CONTENT_TYPE_SELECT) {
+        return config.contentType === 'MCQs' ? "Generating 20 MCQs..." : "Preparing Revision Guide...";
+    }
+    return "Cooking for you...";
+  };
+
+  // --- SUB-VIEWS ---
+
+  const StudentQuiz = () => {
+    const q = mcqData[currentIdx];
+    
+    // Safety check for empty data
+    if (!q) return (
+      <div className="text-center p-12 bg-white dark:bg-gray-800 rounded-[2rem] shadow-xl">
+        <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-4">No MCQs Found</h3>
+        <p className="text-slate-500 mb-8">Bro, something went wrong during generation. Try selecting another chapter.</p>
+        <button onClick={() => setStep(AppStep.CHAPTER_SELECT)} className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black">Back to Chapters</button>
+      </div>
+    );
+
+    const answered = userAnswers[currentIdx] !== null;
+
+    if (isScoreView) {
+      const score = calculateScore();
+      return (
+        <div className="text-center py-10 animate-fade-in">
+          <div className="w-32 h-32 bg-indigo-600 text-white rounded-full flex items-center justify-center mx-auto mb-8 text-4xl font-black border-8 border-indigo-200 shadow-2xl">
+            {mcqData.length > 0 ? Math.round((score / mcqData.length) * 100) : 0}%
+          </div>
+          <h2 className="text-4xl font-black text-slate-900 dark:text-white mb-2">Quiz Finished!</h2>
+          <p className="text-xl font-bold text-slate-500 mb-8">You got {score} out of {mcqData.length} correct.</p>
+          <div className="space-y-4 max-w-sm mx-auto">
+            <button onClick={() => { setIsScoreView(false); setCurrentIdx(0); setUserAnswers(new Array(mcqData.length).fill(null)); }} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black text-lg active-scale shadow-lg">Retry Quiz</button>
+            <button onClick={resetApp} className="w-full py-5 bg-slate-200 dark:bg-gray-800 text-slate-900 dark:text-white rounded-2xl font-black text-lg active-scale">New Topic</button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-w-3xl mx-auto animate-fade-in pb-12">
+        <div className="mb-6 flex justify-between items-center text-xs font-black uppercase tracking-widest text-slate-400">
+          <span>Question {currentIdx + 1} of {mcqData.length}</span>
+          <span className="text-indigo-600 dark:text-indigo-400 font-black">Score: {calculateScore()}</span>
+        </div>
+        <div className="w-full h-3 bg-slate-200 dark:bg-gray-800 rounded-full mb-10 overflow-hidden shadow-inner">
+          <div className="h-full bg-indigo-600 transition-all duration-500" style={{ width: `${((currentIdx + 1) / mcqData.length) * 100}%` }} />
+        </div>
+
+        <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-8 leading-tight">{q.question}</h2>
+
+        <div className="space-y-4 mb-10">
+          {q.options.map((opt, i) => {
+            const isSelected = userAnswers[currentIdx] === i;
+            const isCorrect = i === q.correctIndex;
+            let btnClass = "w-full p-6 text-left rounded-[1.5rem] border-2 font-bold text-lg transition-all flex items-center justify-between ";
+            
+            if (!answered) btnClass += "bg-white dark:bg-gray-800 border-slate-100 dark:border-gray-700 text-slate-900 dark:text-white hover:border-indigo-400 shadow-sm";
+            else if (isSelected && isCorrect) btnClass += "bg-emerald-500 border-emerald-500 text-white shadow-emerald-200 shadow-lg";
+            else if (isSelected && !isCorrect) btnClass += "bg-rose-500 border-rose-500 text-white shadow-rose-200 shadow-lg";
+            else if (isCorrect) btnClass += "bg-emerald-100 dark:bg-emerald-900/30 border-emerald-500 text-emerald-700 dark:text-emerald-400 opacity-60";
+            else btnClass += "bg-slate-100 dark:bg-gray-800 border-transparent text-slate-400 dark:text-gray-600 opacity-30";
+
+            return (
+              <button key={i} onClick={() => handleAnswerSelect(i)} disabled={answered} className={btnClass}>
+                <span>{opt}</span>
+                {answered && isCorrect && <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>}
+                {answered && isSelected && !isCorrect && <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>}
+              </button>
+            );
+          })}
+        </div>
+
+        {answered && (
+          <div className="animate-fade-in">
+            <div className="p-8 bg-indigo-50 dark:bg-indigo-900/30 rounded-[2rem] mb-8 border border-indigo-100 dark:border-indigo-800 shadow-sm">
+              <span className="text-[11px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest block mb-2">Detailed Explanation</span>
+              <p className="text-sm font-bold text-slate-800 dark:text-slate-100 leading-relaxed">{q.explanation}</p>
+            </div>
+            <button 
+              onClick={() => { if (currentIdx < mcqData.length - 1) setCurrentIdx(currentIdx + 1); else setIsScoreView(true); }}
+              className="w-full py-6 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2rem] font-black text-xl shadow-xl active-scale"
+            >
+              {currentIdx < mcqData.length - 1 ? 'Next Question' : 'Finish Quiz'}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const TeacherView = () => (
+    <div className="space-y-8 animate-fade-in max-w-5xl mx-auto pb-12">
+      <div className="bg-emerald-600 text-white px-8 py-6 rounded-[2rem] shadow-xl border border-emerald-500/30 flex items-center gap-6">
+        <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+          <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" /><path fillRule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2 2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clipRule="evenodd" /></svg>
+        </div>
+        <div>
+          <h3 className="font-black text-xl">Teacher Worksheet Mode</h3>
+          <p className="text-sm font-bold opacity-80 uppercase tracking-widest">Master Key for: {config.chapter}</p>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        {mcqData.map((q, i) => (
+          <div key={i} className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-lg border border-slate-100 dark:border-gray-700">
+            <div className="flex gap-4 mb-6">
+              <span className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black flex-shrink-0 text-sm shadow-md">{i+1}</span>
+              <h4 className="text-xl font-black text-slate-900 dark:text-white leading-tight pt-1">{q.question}</h4>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8 ml-14">
+              {q.options.map((opt, oi) => (
+                <div key={oi} className={`p-4 rounded-2xl border font-bold text-sm ${oi === q.correctIndex ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 text-emerald-700 dark:text-emerald-400' : 'bg-slate-50 dark:bg-gray-900 border-slate-200 dark:border-gray-700 text-slate-400'}`}>
+                  {String.fromCharCode(65 + oi)}. {opt}
+                </div>
+              ))}
+            </div>
+            <div className="ml-14 p-6 bg-slate-50 dark:bg-gray-900 rounded-2xl border border-dashed border-slate-300 dark:border-gray-700 shadow-inner">
+               <span className="text-[10px] font-black text-indigo-500 uppercase tracking-widest block mb-2">Pedagogical Insight</span>
+               <p className="text-sm font-bold text-slate-700 dark:text-slate-200 leading-relaxed">{q.explanation}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button onClick={resetApp} className="w-full py-6 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2.5rem] font-black text-xl shadow-2xl active-scale">Generate New Worksheet</button>
+    </div>
   );
+
+  // --- NAVIGATION ---
+  
+  const handleBack = () => {
+    if (step === AppStep.HOME) return;
+    if (step === AppStep.RESULTS) setStep(AppStep.CONTENT_TYPE_SELECT);
+    else if (step === AppStep.CHAPTER_SELECT) setStep(AppStep.SUBJECT_SELECT);
+    else setStep(step - 1);
+  };
 
   if (step === AppStep.HOME) {
     return (
-      <div className="min-h-screen w-full flex flex-col items-center justify-center p-6 bg-gradient-to-br from-indigo-700 via-blue-600 to-cyan-500 text-white text-center">
-        <div className="absolute top-6 right-6">
-           <ThemeToggle />
+      <div className="min-h-screen w-full flex flex-col items-center justify-center p-6 bg-gradient-to-br from-indigo-800 to-blue-700 dark:from-indigo-950 dark:to-black text-white text-center">
+        <button onClick={toggleTheme} className="absolute top-6 right-6 p-4 bg-white/10 rounded-2xl border border-white/20 active-scale shadow-lg">
+          {isDarkMode ? '🌙' : '☀️'}
+        </button>
+        <div className="mb-10 p-12 bg-white/10 rounded-[4rem] backdrop-blur-2xl border border-white/20 shadow-2xl relative">
+          <div className="absolute inset-0 bg-blue-400 blur-[80px] opacity-20 animate-pulse"></div>
+          <svg className="w-24 h-24 text-white relative" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.247 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
         </div>
-        <div className="mb-8 relative">
-           <div className="absolute inset-0 bg-blue-400 blur-3xl opacity-30 animate-pulse"></div>
-           <div className="relative bg-white/20 p-8 rounded-[2.5rem] backdrop-blur-xl border border-white/30 shadow-2xl">
-            <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.247 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
-           </div>
-        </div>
-        <h1 className="text-6xl md:text-8xl font-black mb-3 tracking-tighter">EduFinder</h1>
-        <p className="text-xl md:text-2xl mb-12 text-blue-100 font-medium opacity-90">Instant Exam MCQs & Quick Revision</p>
-        <div className="flex flex-col gap-4 w-full max-w-sm">
-          <button 
-            onClick={handleStart}
-            className="bg-white text-blue-700 px-8 py-5 rounded-[2rem] font-black text-xl shadow-2xl hover:scale-105 active:scale-95 transition-all"
-          >
-            Start Learning
-          </button>
-          <div className="flex items-center justify-between px-6 py-4 bg-white/10 rounded-[1.5rem] border border-white/20">
-             <span className="text-sm font-bold">Teacher Mode</span>
-             <button 
-              onClick={() => setConfig(c => ({...c, isTeacherMode: !c.isTeacherMode}))}
-              className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${config.isTeacherMode ? 'bg-green-400' : 'bg-white/20'}`}
-             >
-               <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${config.isTeacherMode ? 'translate-x-6' : 'translate-x-1'}`} />
-             </button>
+        <h1 className="text-7xl md:text-9xl font-black mb-4 tracking-tighter">EduFinder</h1>
+        <p className="text-xl md:text-2xl mb-12 font-medium opacity-80 tracking-tight">Auto-Gen 20 MCQs for Any Topic</p>
+        <div className="w-full max-w-sm space-y-4">
+          <button onClick={() => setStep(AppStep.CLASS_SELECT)} className="w-full bg-white text-indigo-700 py-6 rounded-[2.5rem] font-black text-2xl shadow-2xl active-scale">Get Started</button>
+          <div className="flex items-center justify-between px-8 py-5 bg-white/10 rounded-[2.5rem] border border-white/20 backdrop-blur-lg">
+            <div className="text-left">
+              <span className="block font-black text-sm">Teacher Mode</span>
+              <span className="text-[10px] opacity-60 font-bold uppercase tracking-widest">Full Answer Key</span>
+            </div>
+            <button onClick={() => setConfig(c => ({...c, isTeacherMode: !c.isTeacherMode}))} className={`w-14 h-8 rounded-full transition-all relative ${config.isTeacherMode ? 'bg-emerald-400' : 'bg-white/30'}`}>
+              <div className={`absolute top-1.5 w-5 h-5 bg-white rounded-full shadow-md transition-all ${config.isTeacherMode ? 'left-8' : 'left-1.5'}`} />
+            </button>
           </div>
         </div>
       </div>
@@ -134,39 +274,33 @@ const App: React.FC = () => {
 
   return (
     <div className="relative min-h-screen">
-      <div className="absolute top-4 right-6 z-50">
-        <ThemeToggle />
+      <div className="absolute top-4 right-6 z-[60]">
+        <button onClick={toggleTheme} className="p-3 bg-white/10 dark:bg-white/5 rounded-2xl backdrop-blur-md border border-white/20 active-scale shadow-sm">
+          {isDarkMode ? '🌙' : '☀️'}
+        </button>
       </div>
-      
+
       {step === AppStep.CLASS_SELECT && (
-        <StepLayout title="Grade" subtitle="Select your grade level" onBack={prevStep}>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-8">
+        <StepLayout title="Grade" subtitle="Select your standard" onBack={handleBack}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {['Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10', 'Class 11', 'Class 12'].map(c => (
-              <button 
-                key={c}
-                onClick={() => selectClass(c as ClassLevel)}
-                className="p-8 bg-white dark:bg-gray-700/50 border-2 border-transparent hover:border-blue-500 rounded-3xl text-center shadow-md transition-all group active:scale-95 flex flex-col items-center justify-center"
-              >
-                <span className="text-3xl md:text-5xl font-black block text-slate-900 dark:text-white group-hover:text-blue-600 mb-2">{c.split(' ')[1]}</span>
-                <span className="text-xs font-bold text-slate-500 dark:text-gray-400 uppercase tracking-widest">{c.split(' ')[0]}</span>
+              <button key={c} onClick={() => selectClass(c as ClassLevel)} className="p-8 bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-xl border-2 border-transparent hover:border-indigo-500 active-scale transition-all flex flex-col items-center group">
+                <span className="text-5xl md:text-7xl font-black text-slate-900 dark:text-white mb-1 leading-none group-hover:text-indigo-600 transition-colors">{c.split(' ')[1]}</span>
+                <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Standard</span>
               </button>
             ))}
           </div>
         </StepLayout>
       )}
 
-      {step === AppStep.SUBJECT_SELECT && config.classLevel && (
-        <StepLayout title="Subject" subtitle={`Latest syllabus for ${config.classLevel}`} onBack={prevStep}>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {CLASS_SUBJECTS[config.classLevel].map(s => (
-              <button 
-                key={s}
-                onClick={() => selectSubject(s)}
-                className="w-full p-6 bg-white dark:bg-gray-700 border border-slate-100 dark:border-gray-600 rounded-2xl text-left flex justify-between items-center group shadow-md hover:shadow-lg transition-all"
-              >
-                <span className="text-lg font-bold text-slate-900 dark:text-white">{s}</span>
-                <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
+      {step === AppStep.SUBJECT_SELECT && (
+        <StepLayout title="Subject" subtitle={`Level: ${config.classLevel}`} onBack={handleBack}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {CLASS_SUBJECTS[config.classLevel as ClassLevel]?.map(s => (
+              <button key={s} onClick={() => selectSubject(s)} className="p-8 bg-white dark:bg-gray-800 rounded-[2rem] flex justify-between items-center shadow-lg active-scale border border-slate-100 dark:border-gray-700 group">
+                <span className="text-2xl font-black text-slate-900 dark:text-white group-hover:text-indigo-600 transition-colors">{s}</span>
+                <div className="w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-900/30 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-all shadow-sm">
+                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
                 </div>
               </button>
             ))}
@@ -175,111 +309,72 @@ const App: React.FC = () => {
       )}
 
       {step === AppStep.CHAPTER_SELECT && (
-        <StepLayout title="Chapter" subtitle={`Curriculum: ${config.subject}`} onBack={prevStep}>
-          {isLoading ? (
-            <div className="flex flex-col items-center py-20 animate-pulse">
-              <div className="w-16 h-16 bg-blue-100 dark:bg-blue-900/30 rounded-3xl mb-4"></div>
-              <p className="text-slate-500 font-bold">Identifying Chapters...</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {chapters.map((ch, i) => (
-                <button 
-                  key={i}
-                  onClick={() => selectChapter(ch)}
-                  className="w-full p-5 bg-white dark:bg-gray-700 border border-slate-100 dark:border-gray-600 rounded-2xl text-left hover:border-blue-500 shadow-md hover:shadow-xl transition-all active:scale-[0.98]"
-                >
-                  <div className="flex gap-4 items-center">
-                    <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-blue-600 text-white rounded-xl text-sm font-black">{i + 1}</div>
-                    <span className="font-bold text-slate-900 dark:text-gray-100 leading-tight">{ch}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </StepLayout>
-      )}
-
-      {step === AppStep.CONTENT_TYPE_SELECT && (
-        <StepLayout title="Select Goal" subtitle={`Focusing on: ${config.chapter}`} onBack={prevStep}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto">
-            {(['MCQs', 'Quick Revision'] as ContentType[]).map(t => (
-              <button 
-                key={t}
-                onClick={() => selectContentType(t)}
-                className="flex items-center gap-6 p-8 bg-white dark:bg-gray-700 border-2 border-transparent shadow-lg rounded-[2rem] hover:border-blue-500 hover:shadow-xl transition-all text-left group"
-              >
-                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center flex-shrink-0 transition-colors ${
-                  t === 'MCQs' ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400' : 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400'
-                } group-hover:bg-blue-600 group-hover:text-white`}>
-                  {CONTENT_TYPE_ICONS[t]}
-                </div>
-                <div>
-                  <span className="text-2xl font-black block text-slate-900 dark:text-white">{t}</span>
-                  <p className="text-sm font-medium text-slate-500">
-                    {t === 'MCQs' ? 'Direct Practice & PDF Links' : 'YouTube revision videos & summary'}
-                  </p>
-                </div>
+        <StepLayout title="Chapter" subtitle={`Subject: ${config.subject}`} onBack={handleBack}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-12">
+            {chapters.map((ch, i) => (
+              <button key={i} onClick={() => { setConfig(p => ({...p, chapter: ch})); setStep(AppStep.CONTENT_TYPE_SELECT); }} className="p-6 bg-white dark:bg-gray-800 rounded-[1.5rem] flex items-center gap-5 shadow-md border border-slate-100 dark:border-gray-700 active-scale hover:border-indigo-500 transition-all text-left group">
+                <span className="w-12 h-12 bg-indigo-600 text-white rounded-2xl flex items-center justify-center font-black flex-shrink-0 shadow-lg text-sm">{i+1}</span>
+                <span className="font-bold text-slate-900 dark:text-white line-clamp-2 leading-snug group-hover:text-indigo-600">{ch}</span>
               </button>
             ))}
           </div>
         </StepLayout>
       )}
 
-      {step === AppStep.RESULTS && results && (
-        <StepLayout title={config.contentType === 'Quick Revision' ? "Quick Revision" : "MCQ Links"} onBack={prevStep} nextLabel="Finish" onNext={resetApp}>
-          <div className="space-y-8 animate-fade-in max-w-7xl mx-auto">
-            <div className="flex justify-between items-center">
-              <div className="flex gap-2">
-                 {config.isTeacherMode && <span className="px-3 py-1 bg-green-100 text-green-700 text-[10px] font-black rounded-full uppercase">Teacher Mode</span>}
-              </div>
-              <button 
-                onClick={() => handleSearch(config)}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full text-xs font-black uppercase tracking-widest hover:bg-blue-200 transition-colors"
-              >
-                Find More
-              </button>
-            </div>
-
-            {config.contentType === 'Quick Revision' && (
-              <div className="bg-emerald-600 text-white rounded-[2.5rem] p-6 shadow-2xl border border-white/10">
-                <h3 className="font-black text-lg tracking-tight uppercase mb-4">Quick Summary</h3>
-                <div className="space-y-4">
-                  {results.sampleQuestions.map((q, i) => (
-                    <div key={i} className="bg-white/10 p-4 rounded-2xl border border-white/5 backdrop-blur-sm">
-                      <p className="text-sm font-bold leading-relaxed whitespace-pre-line">{q}</p>
-                    </div>
-                  ))}
+      {step === AppStep.CONTENT_TYPE_SELECT && (
+        <StepLayout title="Select Goal" subtitle={config.chapter || ""} onBack={handleBack}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+            {(['MCQs', 'Quick Revision'] as ContentType[]).map(t => (
+              <button key={t} onClick={() => {
+                const updatedConfig = { ...config, contentType: t };
+                setConfig(updatedConfig);
+                handleFetchContent(updatedConfig);
+              }} className="p-12 bg-white dark:bg-gray-800 rounded-[3.5rem] shadow-2xl border-2 border-transparent hover:border-indigo-500 group transition-all text-left active-scale">
+                <div className={`w-24 h-24 rounded-[2rem] mb-10 flex items-center justify-center transition-all ${t === 'MCQs' ? 'bg-indigo-100 text-indigo-600' : 'bg-rose-100 text-rose-600'} group-hover:scale-110 group-hover:bg-indigo-600 group-hover:text-white shadow-lg`}>
+                  {CONTENT_TYPE_ICONS[t]}
                 </div>
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-               {results.resources.map((res, i) => (
-                 <a key={i} href={res.url} target="_blank" rel="noopener noreferrer" className="block p-6 bg-white dark:bg-gray-800 rounded-3xl border border-slate-100 dark:border-gray-700 shadow-lg active:scale-95 hover:border-blue-500 transition-all group">
-                    <div className="flex items-center gap-4 mb-2">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-[10px] ${res.type === 'PDF' ? 'bg-rose-500' : res.type === 'Video' ? 'bg-red-600' : 'bg-blue-500'}`}>
-                        {res.type}
-                      </div>
-                      <div className="flex-1 overflow-hidden">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{res.source}</span>
-                        <h4 className="font-black text-slate-900 dark:text-white text-sm line-clamp-1 group-hover:text-blue-600">{res.title}</h4>
-                      </div>
-                    </div>
-                 </a>
-               ))}
-            </div>
-            
-            <button onClick={resetApp} className="w-full py-6 bg-slate-900 dark:bg-white dark:text-slate-900 text-white rounded-3xl font-black text-xl shadow-xl active:scale-95 transition-all">Done</button>
+                <h3 className="text-4xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter">{t}</h3>
+                <p className="text-base font-bold text-slate-400 leading-tight">{t === 'MCQs' ? 'Unique 20-question challenge set' : 'Top 10 crucial study points'}</p>
+              </button>
+            ))}
           </div>
         </StepLayout>
       )}
 
-      {isLoading && step === AppStep.RESULTS && (
-         <div className="fixed inset-0 bg-white/80 dark:bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-[100]">
-            <div className="w-20 h-20 border-8 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-            <p className="mt-6 text-xl font-black text-slate-900 dark:text-white">Analyzing Resources...</p>
-         </div>
+      {step === AppStep.RESULTS && (
+        <StepLayout title={config.contentType === 'MCQs' ? 'Study Hub' : 'Revision Hub'} onBack={handleBack}>
+           {config.contentType === 'MCQs' ? (
+             config.isTeacherMode ? <TeacherView /> : <StudentQuiz />
+           ) : (
+             <div className="max-w-4xl mx-auto space-y-6 pb-12">
+               <div className="bg-indigo-700 text-white p-10 rounded-[3rem] shadow-2xl border border-white/10">
+                 <h2 className="text-3xl font-black mb-10 flex items-center gap-3">
+                   <div className="p-2 bg-white/20 rounded-xl">
+                      <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                   </div>
+                   Key Study Points
+                 </h2>
+                 <div className="space-y-4">
+                    {revisionData.map((point, i) => (
+                      <div key={i} className="flex gap-5 p-6 bg-white/10 rounded-[1.5rem] border border-white/5 backdrop-blur-md">
+                        <span className="w-10 h-10 bg-white/20 text-white rounded-full flex items-center justify-center font-black flex-shrink-0 text-sm">{i+1}</span>
+                        <p className="font-bold leading-relaxed text-lg">{point}</p>
+                      </div>
+                    ))}
+                 </div>
+               </div>
+               <button onClick={resetApp} className="w-full py-7 bg-slate-900 dark:bg-white text-white dark:text-black rounded-[2.5rem] font-black text-2xl active-scale shadow-2xl">Start New Chapter</button>
+             </div>
+           )}
+        </StepLayout>
+      )}
+
+      {isLoading && (
+        <div className="fixed inset-0 bg-white/95 dark:bg-black/95 backdrop-blur-xl z-[100] flex flex-col items-center justify-center p-8 text-center animate-fade-in">
+          <div className="w-24 h-24 border-[10px] border-indigo-600 border-t-transparent rounded-full animate-spin mb-10 shadow-2xl"></div>
+          <h2 className="text-4xl md:text-5xl font-black text-slate-900 dark:text-white mb-3 tracking-tighter">{getLoadingText()}</h2>
+          <p className="text-slate-500 font-bold uppercase tracking-[0.2em] text-sm animate-pulse">Wait while Bro cooks...</p>
+        </div>
       )}
     </div>
   );
