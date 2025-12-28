@@ -18,6 +18,21 @@ export interface StudyConfig {
   isTeacherMode: boolean;
 }
 
+export interface QuizAttempt {
+  date: number;
+  score: number;
+  total: number;
+  percentage: number;
+}
+
+export interface ChapterPerformance {
+  chapter: string;
+  subject: string;
+  classLevel: ClassLevel;
+  attempts: QuizAttempt[];
+  averagePercentage: number;
+}
+
 export enum AppStep {
   HOME = 0,
   CLASS_SELECT = 1,

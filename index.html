@@ -4,6 +4,10 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#4f46e5" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="./manifest.json" />
     <title>EduFinder Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -26,12 +30,20 @@
             user-select: none;
             overflow-x: hidden;
             background-color: #f9fafb;
+            /* Prevent bounce scrolling on mobile */
+            overscroll-behavior-y: contain;
         }
         .dark body { background-color: #000000; }
         .android-scroll::-webkit-scrollbar { width: 0px; background: transparent; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
         .active-scale:active { transform: scale(0.96); transition: transform 0.1s; }
+        
+        /* Shimmer effect for progress bar */
+        @keyframes shimmer {
+            0% { transform: translateX(-100%) skewX(30deg); }
+            100% { transform: translateX(200%) skewX(30deg); }
+        }
     </style>
     <script type="importmap">
 {
