@@ -2,17 +2,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { StudyConfig, MCQQuestion } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
-
 /**
  * Safely parses JSON from the model response.
  * Handles cases where the model might wrap the JSON in markdown code blocks.
  */
 const safeJsonParse = (text: string) => {
   try {
+    if (!text) return null;
     const cleaned = text.replace(/```json|```/gi, "").trim();
-    const parsed = JSON.parse(cleaned);
-    return parsed;
+    return JSON.parse(cleaned);
   } catch (e) {
     console.error("JSON Parse Error:", e, "Raw text received:", text);
     return null;
@@ -20,10 +18,14 @@ const safeJsonParse = (text: string) => {
 };
 
 export const fetchChapters = async (classLevel: string, subject: string): Promise<string[]> => {
+  // Initialize inside function to ensure API_KEY is fresh from environment
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+  
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Provide a list of 15 specific chapters for ${classLevel} ${subject} based on the latest 2024-25 syllabus. Return the result as a raw JSON array of strings ONLY.`,
+      contents: `You are an expert curriculum planner. List exactly 15 official, specific chapter names for ${classLevel} ${subject} based on the latest 2024-25 academic syllabus (NCERT/CBSE/Common Core). 
+      Return the result as a raw JSON array of strings ONLY. NO generic titles like "Introduction". Provide actual topic names.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -33,13 +35,23 @@ export const fetchChapters = async (classLevel: string, subject: string): Promis
       }
     });
     
-    const chapters = safeJsonParse(response.text || "[]");
-    return Array.isArray(chapters) && chapters.length > 0 
-      ? chapters 
-      : ["Unit 1: Fundamentals", "Unit 2: Core Applications", "Unit 3: Advanced Theory"];
+    const text = response.text || "";
+    const chapters = safeJsonParse(text);
+    
+    if (Array.isArray(chapters) && chapters.length > 0) {
+      return chapters;
+    }
+    throw new Error("Invalid response format for chapters");
   } catch (error) {
     console.error("Fetch Chapters Error:", error);
-    return ["Introduction", "Fundamental Concepts", "Theoretical Framework", "Case Studies", "Final Review"];
+    // Returning a slightly more helpful fallback set to indicate a connection issue
+    return [
+      "Unable to load official syllabus.",
+      "Please check your Internet/API Key.",
+      "Chapter 1: The Basics",
+      "Chapter 2: Advanced Topics",
+      "Chapter 3: Final Review"
+    ];
   }
 };
 
@@ -50,19 +62,19 @@ interface StudyResponse {
 }
 
 export const generateEducationalContent = async (config: StudyConfig): Promise<StudyResponse> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
   const { classLevel, subject, contentType, chapter } = config;
   const isMCQ = contentType === 'MCQs';
   
   const prompt = isMCQ 
-    ? `Generate exactly 20 high-quality Multiple Choice Questions for ${classLevel} ${subject}, Chapter: "${chapter}".
-       Each question must have: 
+    ? `Generate 20 professional, high-quality Multiple Choice Questions for ${classLevel} ${subject}, Chapter: "${chapter}".
+       Each object must have: 
        1. 'question' (string)
-       2. 'options' (array of 4 strings)
+       2. 'options' (array of 4 distinct strings)
        3. 'correctIndex' (number 0-3)
-       4. 'explanation' (string)
-       Return the result as a raw JSON array of objects.`
-    : `List 10 key revision bullet points for ${classLevel} ${subject}, Chapter: "${chapter}". 
-       Focus on exam-critical definitions and concepts. Return as a raw JSON array of strings.`;
+       4. 'explanation' (detailed pedagogical explanation)
+       Return as a raw JSON array of objects.`
+    : `List 10 critical revision points for ${classLevel} ${subject}, Chapter: "${chapter}". Return as a raw JSON array of strings.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -97,7 +109,7 @@ export const generateEducationalContent = async (config: StudyConfig): Promise<S
     }
 
     return {
-      summary: `Educational summary for ${chapter}`,
+      summary: `Content for ${chapter}`,
       questions: isMCQ ? (Array.isArray(parsedData) ? parsedData : []) : [],
       revisionPoints: !isMCQ ? (Array.isArray(parsedData) ? parsedData : []) : []
     };
