@@ -52,12 +52,12 @@ const StepLayout: React.FC<{
   onThemeToggle: () => void;
   isDarkMode: boolean;
 }> = ({ title, subtitle, children, onBack, isLoading, onThemeToggle, isDarkMode }) => (
-  <div className="flex flex-col min-h-screen w-full bg-gray-50 dark:bg-black transition-colors duration-300">
+  <div className="flex flex-col min-h-screen w-full bg-slate-50 dark:bg-black transition-colors duration-300">
     <div className="px-6 py-10 bg-indigo-600 dark:bg-indigo-950 text-white shadow-xl rounded-b-[2.5rem] mb-6 animate-fade-in relative z-10">
       <div className="flex items-center justify-between max-w-7xl mx-auto w-full">
         <div className="flex items-center gap-4">
           {onBack && (
-            <button onClick={onBack} className="p-2 bg-white/10 rounded-xl active:scale-90 transition-transform">
+            <button onClick={onBack} className="p-2 bg-white/10 rounded-xl active:scale-90 transition-transform hover:bg-white/20">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" /></svg>
             </button>
           )}
@@ -66,8 +66,8 @@ const StepLayout: React.FC<{
             {subtitle && <p className="mt-1 text-indigo-100 font-medium opacity-80 text-sm">{subtitle}</p>}
           </div>
         </div>
-        <button onClick={onThemeToggle} className="p-3 bg-white/10 rounded-2xl active:scale-90 transition-transform hover:bg-white/20">
-          {isDarkMode ? '🌙' : '☀️'}
+        <button onClick={onThemeToggle} className="p-3 bg-white/10 rounded-2xl active:scale-90 transition-transform hover:bg-white/20 border border-white/10">
+          {isDarkMode ? <span className="text-xl">🌙</span> : <span className="text-xl">☀️</span>}
         </button>
       </div>
     </div>
@@ -75,7 +75,7 @@ const StepLayout: React.FC<{
       {isLoading ? (
         <div className="py-20 text-center flex flex-col items-center">
           <div className="w-16 h-16 border-8 border-indigo-600 border-t-transparent rounded-full animate-spin mb-6"></div>
-          <p className="font-black text-gray-800 dark:text-white text-lg">EduFinder is working...</p>
+          <p className="font-black text-slate-800 dark:text-white text-lg">EduFinder is working...</p>
         </div>
       ) : children}
     </div>
@@ -91,8 +91,6 @@ const App = () => {
   const [chapters, setChapters] = useState<string[]>([]);
   const [results, setResults] = useState<{ content: string[], resources: SearchResource[] } | null>(null);
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
   useEffect(() => {
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
@@ -101,12 +99,16 @@ const App = () => {
     }
   }, [isDarkMode]);
 
-  const toggleTheme = () => setIsDarkMode(prev => !prev);
+  const toggleTheme = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setIsDarkMode(prev => !prev);
+  };
 
   const handleFetchChapters = async (grade: ClassLevel, sub: string) => {
     setIsLoading(true);
     setStep(AppStep.CHAPTER_SELECT);
     try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: `List official 2024-25 syllabus chapters for ${grade} ${sub}. Return ONLY a JSON array of strings.`,
@@ -131,14 +133,15 @@ const App = () => {
     setIsLoading(true);
     setStep(AppStep.RESULTS);
     try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
       const isMCQ = finalConfig.contentType === 'MCQs';
       const persona = finalConfig.isTeacherMode 
-        ? "Professional Educator (focus on answer keys, worksheet quality, and pedagogical accuracy)" 
-        : "Student (focus on easy learning, exam preparation, and clear explanations)";
+        ? "Professional Educator (focus on answer keys, worksheet quality, and detailed pedagogical accuracy)" 
+        : "Student (focus on simple concepts, easy-to-understand revision, and quick preparation)";
       
       const prompt = isMCQ 
         ? `STRICT TASK: Find high-quality MCQ Practice Sets and PDF download links for ${finalConfig.classLevel} ${finalConfig.subject}, Chapter: ${finalConfig.chapter}. 
-           Search for official educational websites and PDFs. 
+           Search for official educational portals and direct PDF links. 
            Persona: ${persona}.
            Do not generate a list of questions in text; focus on finding links for the user.`
         : `Write a quick point-wise revision summary for ${finalConfig.classLevel} ${finalConfig.subject}, Chapter: ${finalConfig.chapter}. 
@@ -153,11 +156,7 @@ const App = () => {
       });
 
       const text = response.text || "";
-      
-      let contentBlocks: string[] = [];
-      if (!isMCQ) {
-        contentBlocks = [text];
-      }
+      let contentBlocks: string[] = isMCQ ? [] : [text];
 
       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const resources: SearchResource[] = chunks.map((c: any) => {
@@ -186,7 +185,7 @@ const App = () => {
   if (step === AppStep.HOME) {
     return (
       <div className="min-h-screen w-full flex flex-col items-center justify-center p-8 bg-gradient-to-br from-indigo-800 to-blue-600 dark:from-indigo-950 dark:to-slate-900 text-white text-center transition-all">
-        <button onClick={toggleTheme} className="absolute top-6 right-6 p-4 bg-white/10 rounded-2xl z-20 active:scale-90 transition-transform hover:bg-white/20">
+        <button onClick={(e) => toggleTheme(e)} className="absolute top-6 right-6 p-4 bg-white/10 rounded-2xl z-20 active:scale-90 transition-transform hover:bg-white/20 border border-white/10">
           {isDarkMode ? '🌙' : '☀️'}
         </button>
         <div className="mb-10 relative">
@@ -198,11 +197,11 @@ const App = () => {
         <h1 className="text-6xl md:text-8xl font-black mb-2 tracking-tighter">EduFinder</h1>
         <p className="text-xl md:text-2xl mb-12 font-medium text-blue-100 opacity-90">Instant Exam MCQs & Revision</p>
         <div className="w-full space-y-4 max-w-sm">
-          <button onClick={() => setStep(AppStep.CLASS_SELECT)} className="w-full bg-white text-indigo-700 py-6 rounded-[2rem] font-black text-2xl shadow-2xl active:scale-95 transition-all hover:bg-gray-100">Start Learning</button>
+          <button onClick={() => setStep(AppStep.CLASS_SELECT)} className="w-full bg-white text-indigo-700 py-6 rounded-[2rem] font-black text-2xl shadow-2xl active:scale-95 transition-all hover:bg-slate-50">Start Learning</button>
           <div className="flex items-center justify-between px-6 py-4 bg-white/10 rounded-[1.5rem] border border-white/20">
             <span className="font-bold text-sm">Teacher Mode</span>
             <button 
-              onClick={() => setConfig(prev => ({...prev, isTeacherMode: !prev.isTeacherMode}))} 
+              onClick={(e) => { e.stopPropagation(); setConfig(prev => ({...prev, isTeacherMode: !prev.isTeacherMode})); }} 
               className={`w-12 h-6 rounded-full transition-all relative ${config.isTeacherMode ? 'bg-green-400' : 'bg-white/40'}`}
             >
               <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-md transition-all ${config.isTeacherMode ? 'left-7' : 'left-1'}`} />
@@ -226,8 +225,8 @@ const App = () => {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-8">
           {Object.keys(CLASS_SUBJECTS).map(c => (
             <button key={c} onClick={() => { setConfig({...config, classLevel: c as ClassLevel}); setStep(AppStep.SUBJECT_SELECT); }} className="p-8 bg-white dark:bg-gray-900 rounded-[2.5rem] shadow-lg active:scale-95 border-2 border-transparent hover:border-indigo-500 transition-all flex flex-col items-center justify-center">
-              <span className="text-4xl md:text-6xl font-black block text-gray-900 dark:text-white leading-none mb-2">{c.split(' ')[1]}</span>
-              <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest">{c.split(' ')[0]}</span>
+              <span className="text-4xl md:text-6xl font-black block text-slate-900 dark:text-white leading-none mb-2">{c.split(' ')[1]}</span>
+              <span className="text-xs font-bold text-slate-500 dark:text-gray-400 uppercase tracking-widest">{c.split(' ')[0]}</span>
             </button>
           ))}
         </div>
@@ -237,7 +236,7 @@ const App = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {config.classLevel && CLASS_SUBJECTS[config.classLevel].map(s => (
             <button key={s} onClick={() => { setConfig({...config, subject: s}); handleFetchChapters(config.classLevel!, s); }} className="w-full p-6 bg-white dark:bg-gray-900 rounded-3xl flex justify-between items-center shadow-md active:scale-[0.98] transition-all hover:border-indigo-400 border border-transparent">
-              <span className="text-xl font-bold text-gray-900 dark:text-white">{s}</span>
+              <span className="text-xl font-bold text-slate-900 dark:text-white">{s}</span>
               <div className="w-10 h-10 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 rounded-full flex items-center justify-center">→</div>
             </button>
           ))}
@@ -249,7 +248,7 @@ const App = () => {
           {chapters.map((ch, i) => (
             <button key={i} onClick={() => { setConfig({...config, chapter: ch}); setStep(AppStep.CONTENT_TYPE_SELECT); }} className="w-full p-5 bg-white dark:bg-gray-900 rounded-2xl flex items-center gap-4 shadow-sm active:scale-[0.98] transition-all border border-transparent hover:border-indigo-400">
               <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-black flex-shrink-0">{i+1}</div>
-              <span className="font-bold text-gray-900 dark:text-gray-100 text-left leading-tight">{ch}</span>
+              <span className="font-bold text-slate-900 dark:text-gray-100 text-left leading-tight">{ch}</span>
             </button>
           ))}
         </div>
@@ -263,8 +262,8 @@ const App = () => {
                 {t === 'MCQs' ? <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg> : <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
               </div>
               <div className="text-left">
-                <span className="text-2xl font-black text-gray-900 dark:text-white block">{t}</span>
-                <p className="text-sm font-medium text-gray-500">{t === 'MCQs' ? 'Find MCQ PDF Links' : 'YouTube Revision & Summary'}</p>
+                <span className="text-2xl font-black text-slate-900 dark:text-white block">{t}</span>
+                <p className="text-sm font-medium text-slate-500">{t === 'MCQs' ? 'Direct Practice PDF Links' : 'YouTube Revision & Summary'}</p>
               </div>
             </button>
           ))}
@@ -273,6 +272,12 @@ const App = () => {
 
       {step === AppStep.RESULTS && (
         <div className="space-y-6 animate-fade-in max-w-5xl mx-auto">
+          {config.isTeacherMode && (
+            <div className="bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-6 py-3 rounded-full font-black text-xs uppercase tracking-widest text-center border border-indigo-200 dark:border-indigo-800">
+              Teacher Mode Active
+            </div>
+          )}
+          
           {config.contentType !== 'MCQs' && results?.content && results.content.length > 0 && (
             <div className="bg-emerald-600 text-white rounded-[2.5rem] p-8 shadow-2xl">
               <h3 className="font-black text-xl mb-6 uppercase tracking-tight flex items-center gap-2">
@@ -290,32 +295,32 @@ const App = () => {
           )}
 
           <div className="space-y-4">
-            <h4 className="px-4 text-xs font-black text-gray-500 dark:text-gray-400 uppercase tracking-widest">
+            <h4 className="px-4 text-xs font-black text-slate-500 dark:text-gray-400 uppercase tracking-widest">
               {config.contentType === 'MCQs' ? 'Verified MCQ Links & PDFs' : 'Recommended Study Resources'}
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {results?.resources.map((res, i) => (
-                <a key={i} href={res.url} target="_blank" className="block p-6 bg-white dark:bg-gray-900 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-xl active-scale hover:border-indigo-500 transition-all">
+                <a key={i} href={res.url} target="_blank" rel="noopener noreferrer" className="block p-6 bg-white dark:bg-gray-900 rounded-3xl border border-slate-200 dark:border-gray-800 shadow-xl active-scale hover:border-indigo-500 transition-all group">
                   <div className="flex items-center gap-4">
                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white font-black text-xs shrink-0 ${res.type === 'PDF' ? 'bg-rose-500' : res.type === 'Video' ? 'bg-red-600' : 'bg-blue-600'}`}>
                       {res.type === 'PDF' ? 'PDF' : res.type === 'Video' ? 'Play' : 'Web'}
                     </div>
                     <div className="flex-1 overflow-hidden text-left">
-                      <h3 className="text-lg font-black text-gray-900 dark:text-white truncate">{res.title}</h3>
-                      <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">{res.source}</span>
+                      <h3 className="text-lg font-black text-slate-900 dark:text-white truncate group-hover:text-indigo-600">{res.title}</h3>
+                      <span className="text-[10px] font-bold text-slate-400 dark:text-gray-500 uppercase">{res.source}</span>
                     </div>
                   </div>
                 </a>
               ))}
             </div>
             {(!results?.resources || results.resources.length === 0) && (
-              <div className="text-center py-20 text-gray-400 font-medium italic">No links found for this chapter yet. Try shuffling.</div>
+              <div className="text-center py-20 text-slate-400 font-medium italic">No links found for this chapter yet. Try shuffling.</div>
             )}
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <button onClick={() => handleFetchContent(config)} className="w-full py-4 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-2xl font-black text-sm uppercase tracking-widest active:scale-95 transition-all hover:bg-blue-200">Shuffle / Find More</button>
-            <button onClick={reset} className="w-full py-6 bg-gray-900 dark:bg-white dark:text-black text-white rounded-[2rem] font-black text-xl shadow-xl active:scale-95 transition-all hover:opacity-90">Start New Search</button>
+            <button onClick={() => handleFetchContent(config)} className="w-full py-4 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-2xl font-black text-sm uppercase tracking-widest active:scale-95 transition-all hover:bg-indigo-100">Shuffle / Find More</button>
+            <button onClick={reset} className="w-full py-6 bg-slate-900 dark:bg-white dark:text-black text-white rounded-[2rem] font-black text-xl shadow-xl active:scale-95 transition-all hover:opacity-90">Start New Search</button>
           </div>
         </div>
       )}
